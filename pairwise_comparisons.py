@@ -219,13 +219,14 @@ def main():
                                    [(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype) for x in comparisons],
                                    chunksize=1)
     final = pd.concat(results)
-    mean_pid = final['PID'].mean()
-    median_pid = final['PID'].median()
-    sd_pid = final['PID'].std()
+    final.to_csv(args.outfile, index = False)
+    PID = pd.Series([float(x) for x in final['PID']],name='PID')
+    mean_pid = PID.mean()
+    median_pid = PID.median()
+    sd_pid = PID.std()
     print("Mean PID: {0}".format(mean_pid))
     print("Median PID: {0}".format(median_pid))
     print("Stdev PID: {0}".format(sd_pid))
-    final.to_csv(args.outfile, index = False)
     printc('Analysis complete: check result in {0}\n'.format(args.outfile),'blue')
 #%%
 if __name__ == '__main__':
