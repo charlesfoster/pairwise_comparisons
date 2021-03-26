@@ -42,7 +42,7 @@ General usage:
 ```
 pairwise_comparisons.py [-h] -c <.txt file> [-d <nucleotide / protein>] -f FASTA [-ii] [-ig] [-ia] [-te] [-o OUTFILE]
 ```
-
+```
 optional arguments:
   -h, --help            show help message and exit
   -c <.tsv file>, --comparisons <.tsv file>
@@ -65,7 +65,7 @@ optional arguments:
   -o OUTFILE, --outfile OUTFILE
                         Name of the outfile to store results (default:
                         results.csv)
-
+```
 ## What do you get?
 The output file (in .csv format) contains statistics about the sequences that were compared. The columns, in order, contain:
 
