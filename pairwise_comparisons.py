@@ -9,6 +9,7 @@ import pandas as pd
 from Bio import AlignIO
 import argparse
 import multiprocessing as mp
+import sys
 try:
     import tqdm
     tqdm_installed = True
@@ -25,6 +26,20 @@ def printc(thing, level):
     print(f"{col}{thing}\033[0m")
     return()
 
+#%%
+def check_input(comparisons, MSA):
+    '''
+    Quick check to make sure that the comparison names match names in the alignment
+    '''
+    flat_comp = [x.split(sep='\t') for x in comparisons]
+    flat_comp = [item for sublist in flat_comp for item in sublist]
+    flat_comp = [x.split()[0] for x in flat_comp]
+    seqs = [x.id for x in MSA]
+    if not set(flat_comp).issubset(seqs):
+        sys.exit('''
+Error: Some of your comparison IDs are not present as headers in your alignment file. Check the spelling and try again
+''')
+    
 #%%
 def indices(string,bad_sites=['N','-']):
     '''
@@ -64,7 +79,7 @@ def calc_differences(name1,seq1,name2,seq2,removals):
         summary.append(i+str(idx+1)+j)
         if i==j:
             status.append('MATCH')
-        else: 
+        else:
             status.append('DIFFERENCE')
     summary_df = pd.concat([pd.Series(sites,name='sites'),pd.Series(summary,name='summary'),pd.Series(status,name='status')], axis=1)
     full_differences = summary_df[summary_df.status.isin(['DIFFERENCE'])]
@@ -119,7 +134,7 @@ def find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_en
     if ignore_gaps == True or ignore_ambiguous == True:
         a = [i for i,x in enumerate([y for y in seq1]) if x in bad_sites]
         b = [i for i,x in enumerate([y for y in seq2]) if x in bad_sites]
-        removals = list(set().union(a,b)) 
+        removals = list(set().union(a,b))
     removals = list(set().union(removals,trim_sites))
     indel_sites = []
     for idx,(i,j) in enumerate(zip(seq1,seq2)):
@@ -129,11 +144,12 @@ def find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_en
     if ignore_indels == False:
         removals = [x for x in removals if x not in indel_sites]
     removals.sort()
-    return(removals) 
+    return(removals)
 
 #%%
 def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_ambiguous=False,trim_ends=True,seqtype='nucleotide'):
     ppair = pair.split(sep='\t')
+    ppair = [x.split()[0] for x in ppair]
     sequences = []
     for record in MSA:
         if record.id in ppair:
@@ -141,7 +157,7 @@ def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_
     if seqtype != 'nucleotide':
         ambiguity_codes = []
     else:
-        ambiguity_codes = ['M','R','W','S','Y','K','V','H','D','B']        
+        ambiguity_codes = ['M','R','W','S','Y','K','V','H','D','B']
     seq1 = sequences[0].seq
     name1 = sequences[0].id
     seq2 = sequences[1].seq
@@ -158,9 +174,9 @@ def parse_commands():
     global args
     #"Parse the input arguments, use -h for help"
     epilog = '''
-    Compares pairs of sequences described within a tab-delimited text file to 
+    Compares pairs of sequences described within a tab-delimited text file to
     determine the pairwise identity between each pair, and report the differences.
-    Optional flags determine how differences are calculated: indels, gaps, and 
+    Optional flags determine how differences are calculated: indels, gaps, and
     ambiguous sites can be ignored, and runs of 'N' or '-' from the ends of sequences
     can also be ignored in calculations. Each of these flags can be used in combination.
     Internal gaps are defined as 'N' if indels are included in calculations (default), but are re-defined
@@ -203,19 +219,21 @@ def main():
     MSA = AlignIO.read(args.fasta,'fasta')
     with open(args.comparisons,'r') as file:
         comparisons = file.read().splitlines()
+    
+    check_input(comparisons, MSA)
     printc('Calculating pairwise similarities','blue')
     print('Number of sequences: {0}'.format(len(MSA)))
     print('Number of comparisons: {0}'.format(len(comparisons)))
     if tqdm_installed == True:
         with mp.Pool(mp.cpu_count()) as pool:
-            results = pool.starmap(compare_seqs_parallel, 
+            results = pool.starmap(compare_seqs_parallel,
                                    tqdm.tqdm([(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype) for x in comparisons], total=len(comparisons)),
                                    chunksize=1)
     else:
         print("If you install 'tqdm', you can get a nice progress bar while the program runs")
         print("Try running 'python3 -m pip install tqdm' before you run this program again")
         with mp.Pool(mp.cpu_count()) as pool:
-            results = pool.starmap(compare_seqs_parallel, 
+            results = pool.starmap(compare_seqs_parallel,
                                    [(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype) for x in comparisons],
                                    chunksize=1)
     final = pd.concat(results)
