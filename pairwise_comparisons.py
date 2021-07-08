@@ -7,6 +7,8 @@ Created on Sun Mar 21 14:46:03 2021
 """
 import pandas as pd
 from Bio import AlignIO
+from Bio.SeqRecord import SeqRecord
+from Bio.Seq import Seq
 import argparse
 import multiprocessing as mp
 import sys
