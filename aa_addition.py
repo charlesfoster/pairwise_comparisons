@@ -5,7 +5,7 @@ Created on Thu Jul  8 11:34:08 2021
 
 @author: cfos
 """
-annotation_bed = "/home/cfos/Programs/pairwise_comparisons/SARS-CoV_2_annotations.bed"
+annotation_bed = "/home/vrl/Programs/pairwise_comparisons/SARS-CoV_2_annotations.bed"
 annotations = pd.read_csv(annotation_bed, header=None, sep="\t")
 fasta = '/home/cfos/Documents/Collaboration/Elsa/all_samples.fasta'
 
@@ -171,6 +171,7 @@ refseq = [x for x in refseq[0]]
 refseq.index('-')
 
 insertions = [i for i, ltr in enumerate(refseq[0].seq) if ltr == '-' and i < 29902] # need to change to args.reflength
+insertions = [i for i, ltr in enumerate(ref) if ltr == '-' and i < 29902] # need to change to args.reflength
 annotations = pd.read_csv(annotation_bed, header=None, sep="\t")
 
 def fix_bed_insertions(annotations, insertions):
