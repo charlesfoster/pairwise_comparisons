@@ -34,7 +34,12 @@ calculations (default), but are re-defined as '-' or 'N' if indels are ignored.
 
 ## What do you need to run the program?
 * <alignment>.fasta: a multiple sequence alignment in fasta format (the sequences must be aligned beforehand)
-* <comparisons>.tsv: a tab-delimited text file names of sequences to be compared (the names must exactly match the sequence headers in the fasta file)
+* <comparisons>.tsv: a tab-delimited text file with names of sequences to be compared (the names must exactly match the sequence headers in the fasta file), without a header. e.g.:
+  ```
+  sequence1 sequence2
+  sequence1 sequence3
+  sequence2 sequence3
+  ```
 
 ## How do you run the program?
 General usage:
@@ -80,8 +85,8 @@ The output file (in .csv format) contains statistics about the sequences that we
 At the end of the analysis, the mean, median, and stdev pairwise identity (across all comparisons) will be printed to stdout in your terminal.
 
 ## Future improvements
-* At some stage I will update the program to have an option to calculate the effects of nucleotide differences at the amino acid level (i.e., whether differences are synonymous or non-synonymous). This approach will be via providing gene coordinates, or via implementing a blast annotation step. Haven't decided yet.
-
+* I've added an option to calculate the effects of nucleotide differences at the amino acid level (i.e., whether differences are synonymous or non-synonymous). It's fairly robust, but still a work in progress.
+  
 ## Citation
 If you use this software and find it useful, I'd appreciate some kind of attribution, e.g.:
 
