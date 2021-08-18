@@ -2,6 +2,6 @@
 .*
 !.gitignore
 !README.md
-!*.py
+!pairwise_comparisons.py
 !LICENSE
 !SARS-CoV_2_annotations.bed

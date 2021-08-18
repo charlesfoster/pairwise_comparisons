@@ -4,12 +4,21 @@
 Created on Sun Mar 21 14:46:03 2021
 
 @author: Dr Charles Foster, Virology Research Lab
+
+To do:
+- Change the way that insertions are counted as differences. Currently, every
+gap position is counted as a difference. Probably better to count consecutive 
+gap positions as a single event.
+
+- Parse insertions CSV file from NextAlign as input
+    
+    
 """
 import pandas as pd
 from Bio import AlignIO
-from Bio.SeqRecord import SeqRecord
 from Bio.Seq import Seq
 import argparse
+import re
 import multiprocessing as mp
 import sys
 try:
@@ -41,7 +50,26 @@ def check_input(comparisons, MSA):
         sys.exit('''
 Error: Some of your comparison IDs are not present as headers in your alignment file. Check the spelling and try again
 ''')
-    
+
+#%%
+def find_insertions(MSA, annotations):
+    refseq = []
+    for record in MSA:
+        if record.id == annotations.iloc[0][0]:
+            refseq.append(record)
+    insertions = [i for i, ltr in enumerate(refseq[0].seq) if ltr == '-' and i < 29902] # need to change to args.reflength
+    return insertions
+
+#%%
+def fix_bed_insertions(annotations, insertions):
+    for i in annotations.index:
+        for site in insertions:
+            if site < annotations.iloc[i][1] and site < (annotations.iloc[i][2]-1):
+                annotations.at[i,1] = annotations.at[i,1] + 1
+                annotations.at[i,2] = annotations.at[i,2] + 1
+            elif site > annotations.iloc[i][1]  and site < (annotations.iloc[i][2]-1):
+                annotations.at[i,2] = annotations.at[i,2] + 1
+ 
 #%%
 def indices(string,bad_sites=['N','-']):
     '''
@@ -68,7 +96,85 @@ def trim_seqs(seq1,seq2):
     return [new_seq1,new_seq2]
 
 #%%
-def calc_differences(name1,seq1,name2,seq2,removals):
+def prep_aa_seqs(fix_seq1, fix_seq2, new_site):
+    '''
+    Remove internal gaps before attempting translation
+    '''
+    deletions = []
+    keep = []
+    for idx,(i,j) in enumerate(zip(fix_seq1,fix_seq2)):
+        if i == '-' or j == '-':
+            deletions.append(idx)
+        if i != '-' or j != '-':
+            keep.append(idx)
+    aa_seq1 = Seq(''.join([fix_seq1[x] for x in keep]))
+    aa_seq2 = Seq(''.join([fix_seq2[x] for x in keep]))
+    for delsite in deletions:
+        if delsite < new_site:
+            new_site = new_site-1
+    res = [aa_seq1, aa_seq2, new_site]
+    return res
+ 
+#%%
+def get_aa_differences(seq1,seq2,annotations,difference_sites):
+    aa_results = []
+    for i in range(len(annotations.index)):
+        gene_range = range(int(annotations.iloc[i][1]),int(annotations.iloc[i][2]))
+        reduced_df = annotations.iloc[i]
+        start = int(reduced_df[1])
+        end = int(reduced_df[2])
+        gene_name = reduced_df.iloc[3]
+        for site in difference_sites:
+            if site in gene_range:
+                new_site = site
+                if reduced_df[4] == True:
+                    slip_site = int(reduced_df[5])
+                    fix_seq1a = seq1[start:slip_site]
+                    fix_seq1b = seq1[slip_site-1:end]
+                    fix_seq1 = fix_seq1a+fix_seq1b
+                    fix_seq2a = seq2[start:slip_site]
+                    fix_seq2b = seq2[slip_site-1:end]
+                    fix_seq2 = fix_seq2a+fix_seq2b
+                else:
+                    fix_seq1 = seq1[start:end]
+                    fix_seq2 = seq2[start:end]
+
+                if reduced_df[4] == True and int(reduced_df[5]) < new_site:
+                    new_site = new_site +1
+                
+                new_site = new_site-start
+                new_seqs = prep_aa_seqs(fix_seq1, fix_seq2, new_site)
+                aa_seq1 = new_seqs[0]
+                aa_seq2 = new_seqs[1]
+                new_site = new_seqs[2]
+                 
+                if len(aa_seq1) % 3 !=0:
+                    aa_results.append(str(site+1)+':'+gene_name+":FRAMESHIFT")
+                else:
+                    mod = list(range(0,(len(aa_seq1)+1))).index(new_site+1) % 3
+                    if mod == 1:
+                        codon_pos = 1
+                        slice_range = range(new_site,new_site+4)
+                    elif mod == 2:
+                        codon_pos = 2
+                        slice_range = range(new_site-1,new_site+3)
+                    else:
+                        codon_pos = 3
+                        slice_range = range(new_site-2,new_site+2)
+                    codon_num = int(slice_range[-1]/3)
+                    codon1 = aa_seq1[slice_range[0]:slice_range[-1]]
+                    codon2 = aa_seq2[slice_range[0]:slice_range[-1]]
+                    codon1_AA = codon1.translate()
+                    codon2_AA = codon2.translate()
+                    if codon1_AA == codon2_AA:
+                        result = str(site+1)+':'+gene_name+':'+str(codon1_AA)+str(codon_num)+str(codon2_AA)+":s"
+                    elif codon1_AA != codon2_AA:
+                        result = str(site+1)+':'+gene_name+':'+str(codon1_AA)+str(codon_num)+str(codon2_AA)+":n"
+                    aa_results.append(result)
+    return aa_results
+
+#%%
+def calc_differences(name1,seq1,name2,seq2,removals, annotations):
     ''''
     Calculate total pairwise differences. These are later pruned based on trimming conditions.
     '''
@@ -99,13 +205,31 @@ def calc_differences(name1,seq1,name2,seq2,removals):
     PID = "{:.2f}".format((num_reduced_matches/reduced_total_length)*100)
     if reduced_total_length > 0 and PID == '100.00':
         PID = (num_reduced_matches/reduced_total_length)*100
-    calc_dict = {'Seq1':[name1],
-                 'Seq2':[name2],
-                 'Full_Alignment_Length':[full_length],
-                 'Trimmed_Alignment_Length':[reduced_total_length],
-                 'Num_Differences':[num_reduced_differences],
-                 'PID':[PID],
-                 'Differences':[final_differences]}
+    if args.translate:
+        if num_reduced_differences != 0:
+            difference_sites = [x for x in reduced_differences.loc[reduced_differences['status'] == 'DIFFERENCE']['sites'].to_list()]
+            aa_differences = get_aa_differences(seq1,seq2,annotations,difference_sites)
+            my_order = [int(re.sub(pattern=':.*',repl='',string=x)) for x in aa_differences]
+            my_order = [i[0] for i in sorted(enumerate(my_order), key=lambda x:x[1])]
+            aa_differences = '; '.join([aa_differences[x] for x in my_order])
+        else:
+            aa_differences = ''
+        calc_dict = {'Seq1':[name1],
+                     'Seq2':[name2],
+                     'Full_Alignment_Length':[full_length],
+                     'Trimmed_Alignment_Length':[reduced_total_length],
+                     'Num_Differences':[num_reduced_differences],
+                     'PID':[PID],
+                     'Differences':[final_differences],
+                     'AA_Differences':[aa_differences]}
+    else:
+        calc_dict = {'Seq1':[name1],
+                    'Seq2':[name2],
+                    'Full_Alignment_Length':[full_length],
+                    'Trimmed_Alignment_Length':[reduced_total_length],
+                    'Num_Differences':[num_reduced_differences],
+                    'PID':[PID],
+                    'Differences':[final_differences]}      
     return(calc_dict)
 #%%
 def find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_ends,ignore_indels):
@@ -149,7 +273,7 @@ def find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_en
     return(removals)
 
 #%%
-def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_ambiguous=False,trim_ends=True,seqtype='nucleotide'):
+def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_ambiguous=False,trim_ends=True,seqtype='nucleotide', annotations = ''):
     ppair = pair.split(sep='\t')
     ppair = [x.split()[0] for x in ppair]
     sequences = []
@@ -165,7 +289,7 @@ def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_
     seq2 = sequences[1].seq
     name2 = sequences[1].id
     removals = find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_ends,ignore_indels)
-    result = calc_differences(name1,seq1,name2,seq2,removals)
+    result = calc_differences(name1,seq1,name2,seq2,removals, annotations)
     return pd.DataFrame.from_dict(result, orient='columns')
 
 #%%
@@ -186,6 +310,7 @@ def parse_commands():
     '''
     parser=argparse.ArgumentParser(description="Sequence Pairwise Comparison Script (version "+version+')', formatter_class=argparse.ArgumentDefaultsHelpFormatter, epilog=epilog)
     #Read inputs
+    parser.add_argument('-a','--annotations', required=False, default=False, help='Modified bed file with annotations for CDS regions (see example file)')
     parser.add_argument('-c','--comparisons', required=True, help='Tab-delimited text file (no header) with seqs to compare: col1 = seq1, col2 = seq2', metavar='<.tsv file>')
     parser.add_argument('-d','--data_type', required=False, default='nucleotide', help="Type of data in alignment", metavar="<nucleotide / protein>")
     parser.add_argument('-f','--fasta', required=True, help="Fasta file containing aligned sequences")
@@ -193,6 +318,7 @@ def parse_commands():
     parser.add_argument('-ig','--ignore_gaps', required=False, default=False, action='store_true', help="Ignore gaps when calculating pairwise identity")
     parser.add_argument('-ia','--ignore_ambiguous', required=False, default=False, action='store_true', help="Ignore ambiguous sites when calculating pairwise identity")
     parser.add_argument('-te','--trim_ends', required=False,  action='store_true', default=False, help='Trim runs of gaps ("N" or "-") at the beginning and end of alignments')
+    parser.add_argument('-tr','--translate', required=False,  action='store_true', default=False, help='Translate CDS regions from annotation file to calculate amino acid consequences')
     parser.add_argument('-o','--outfile', required=False, default='results.csv', help='Name of the outfile to store results')
     args=parser.parse_args()
     return()
@@ -219,6 +345,17 @@ def main():
         trim_ends = False
     seqtype = args.data_type.lower()
     MSA = AlignIO.read(args.fasta,'fasta')
+    
+    if args.translate and not args.annotations:
+        print('\nError: cannot calculate the amino acid consequences of differences without an annotation file\n')
+        sys.exit(-1)
+    
+    annotations = ''
+    if args.translate:
+        annotations = pd.read_csv(args.annotations, header=None, sep="\t")
+        insertions = find_insertions(MSA, annotations)
+        fix_bed_insertions(annotations, insertions)
+
     with open(args.comparisons,'r') as file:
         comparisons = file.read().splitlines()
     
@@ -229,14 +366,14 @@ def main():
     if tqdm_installed == True:
         with mp.Pool(mp.cpu_count()) as pool:
             results = pool.starmap(compare_seqs_parallel,
-                                   tqdm.tqdm([(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype) for x in comparisons], total=len(comparisons)),
+                                   tqdm.tqdm([(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations) for x in comparisons], total=len(comparisons)),
                                    chunksize=1)
     else:
         print("If you install 'tqdm', you can get a nice progress bar while the program runs")
         print("Try running 'python3 -m pip install tqdm' before you run this program again")
         with mp.Pool(mp.cpu_count()) as pool:
             results = pool.starmap(compare_seqs_parallel,
-                                   [(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype) for x in comparisons],
+                                   [(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations) for x in comparisons],
                                    chunksize=1)
     final = pd.concat(results)
     final.to_csv(args.outfile, index = False)
