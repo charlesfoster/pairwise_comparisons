@@ -40,18 +40,11 @@ calculations (default), but are re-defined as '-' or 'N' if indels are ignored.
 General usage:
 
 ```
-Sequence Pairwise Comparison Script (version 1.0.0)
-usage: pairwise_comparisons.py [-h] [-a ANNOTATIONS] -c <.tsv file>
-                               [-d <nucleotide / protein>] -f FASTA [-ii]
-                               [-ig] [-ia] [-te] [-tr] [-o OUTFILE]
-
-Sequence Pairwise Comparison Script (version 1.0.0)
-
+pairwise_comparisons.py [-h] -c <.txt file> [-d <nucleotide / protein>] -f FASTA [-ii] [-ig] [-ia] [-te] [-o OUTFILE]
+```
+```
 optional arguments:
-  -h, --help            show this help message and exit
-  -a ANNOTATIONS, --annotations ANNOTATIONS
-                        Modified bed file with annotations for CDS regions
-                        (see example file) (default: False)
+  -h, --help            show help message and exit
   -c <.tsv file>, --comparisons <.tsv file>
                         Tab-delimited text file (no header) with seqs to
                         compare: col1 = seq1, col2 = seq2 (default: None)
@@ -69,20 +62,9 @@ optional arguments:
                         identity (default: False)
   -te, --trim_ends      Trim runs of gaps ("N" or "-") at the beginning and
                         end of alignments (default: False)
-  -tr, --translate      Translate CDS regions from annotation file to
-                        calculate amino acid consequences (default: False)
   -o OUTFILE, --outfile OUTFILE
                         Name of the outfile to store results (default:
                         results.csv)
-
-Compares pairs of sequences described within a tab-delimited text file to
-determine the pairwise identity between each pair, and report the differences.
-Optional flags determine how differences are calculated: indels, gaps, and
-ambiguous sites can be ignored, and runs of 'N' or '-' from the ends of
-sequences can also be ignored in calculations. Each of these flags can be used
-in combination. Internal gaps are defined as 'N' if indels are included in
-calculations (default), but are re-defined as '-' or 'N' if indels are ignored
-(--ignore_indels).
 ```
 ## What do you get?
 The output file (in .csv format) contains statistics about the sequences that were compared. The columns, in order, contain:
@@ -98,7 +80,7 @@ The output file (in .csv format) contains statistics about the sequences that we
 At the end of the analysis, the mean, median, and stdev pairwise identity (across all comparisons) will be printed to stdout in your terminal.
 
 ## Future improvements
-* I've added an option to calculate the effects of nucleotide differences at the amino acid level (i.e., whether differences are synonymous or non-synonymous). It's fairly robust, but still a work in progress.
+* At some stage I will update the program to have an option to calculate the effects of nucleotide differences at the amino acid level (i.e., whether differences are synonymous or non-synonymous). This approach will be via providing gene coordinates, or via implementing a blast annotation step. Haven't decided yet.
 
 ## Citation
 If you use this software and find it useful, I'd appreciate some kind of attribution, e.g.:
