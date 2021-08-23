@@ -16,6 +16,12 @@ Make the python script executable:
 chmod +x ./pairwise_comparisons.py
 ```
 
+Mandatory: install biopython (if not already installed):
+
+```
+python3 -m pip install biopython
+```
+
 Optional: install the 'tqdm' python3 package to get a nice progress bar while the program runs:
 
 ```
