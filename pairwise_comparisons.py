@@ -6,15 +6,24 @@ Created on Sun Mar 21 14:46:03 2021
 @author: Dr Charles Foster, Virology Research Lab
 
 To do:
-- Change the way that insertions are counted as differences. Currently, every
-gap position is counted as a difference. Probably better to count consecutive 
-gap positions as a single event.
+- Fix up or remove the amino acid translation option:
+    * Currently weird/wrong when deletions occur
+    * Not really useful for this program?
 
-- Parse insertions CSV file from NextAlign as input
-    
+- Add option to _only_ get SNP matrix as output
+
+- Add option to work with _all_ seqs in an alignment?
+    * Would eliminate the need for a comparisons.tsv file
+
+- Update README to require networkx installation, or formulate a different way
+  of converting to matrix & writing to csv
+  
+- Update README in general
     
 """
 import pandas as pd
+from itertools import groupby, count
+import networkx as nx
 from Bio import AlignIO
 from Bio.Seq import Seq
 import argparse
@@ -26,13 +35,13 @@ try:
     tqdm_installed = True
 except:
     tqdm_installed = False
-version = '1.0.0'
+version = '1.1.0'
 #%%
 def printc(thing, level):
     '''
     Print in colour :)
     '''
-    cols = {'green':'\033[1;32m', 'blue':'\033[96m'}
+    cols = {'green':'\033[1;32m', 'blue':'\033[96m', 'yellow':'\033[93m'}
     col = cols[level]
     print(f"{col}{thing}\033[0m")
     return()
@@ -50,6 +59,43 @@ def check_input(comparisons, MSA):
         sys.exit('''
 Error: Some of your comparison IDs are not present as headers in your alignment file. Check the spelling and try again
 ''')
+
+#%%
+def intervals(data):
+    out = []
+    counter = count()
+    for key, group in groupby(data, key = lambda x: x-next(counter)):
+        block = list(group)
+        out.append([block[0], block[-1], len(block)])
+    return out
+
+#%%
+def find_consecutive_gaps(reduced_differences):
+    indels = reduced_differences[reduced_differences['vartype']=='INDEL']['summary']
+    s1_indels = [int(re.sub(r"\D", "",x)) for x in indels if x.startswith('-')]
+    s2_indels = [int(re.sub(r"\D", "",x)) for x in indels if x.endswith('-')]
+    s1_intervals = intervals(s1_indels)
+    s2_intervals = intervals(s2_indels)
+    return {"seq1":s1_intervals, "seq2":s2_intervals}
+
+#%%
+def convert_to_matrix(results_table):
+    '''
+    Convert results table into a SNP matrix
+    '''
+    reduced_results = results_table[["Seq1","Seq2","Num_Differences"]]
+    G = nx.from_pandas_edgelist(
+    reduced_results,
+    source='Seq1',
+    target='Seq2',
+    edge_attr='Num_Differences')
+
+    adjacency_df = pd.DataFrame(
+        nx.adjacency_matrix(G, weight='Num_Differences').todense(),
+        index=G.nodes,
+        columns=G.nodes
+    )
+    return adjacency_df
 
 #%%
 def find_insertions(MSA, annotations):
@@ -174,7 +220,7 @@ def get_aa_differences(seq1,seq2,annotations,difference_sites):
     return aa_results
 
 #%%
-def calc_differences(name1,seq1,name2,seq2,removals, annotations):
+def calc_differences(name1,seq1,name2,seq2,removals, annotations, gap_identity):
     ''''
     Calculate total pairwise differences. These are later pruned based on trimming conditions.
     '''
@@ -182,19 +228,43 @@ def calc_differences(name1,seq1,name2,seq2,removals, annotations):
     sites = []
     summary = []
     status = []
+    vartype = []
     for idx,(i,j) in enumerate(zip(seq1,seq2)):
         sites.append(idx)
         summary.append(i+str(idx+1)+j)
         if i==j:
             status.append('MATCH')
+            if i=="-" and j=="-":
+                vartype.append('SHARED_DELELTION')
+            else:
+                vartype.append('NA')
         else:
+            if i == "-" or j == "-":
+                vartype.append('INDEL')
+            else:
+                vartype.append('SNP')
             status.append('DIFFERENCE')
-    summary_df = pd.concat([pd.Series(sites,name='sites'),pd.Series(summary,name='summary'),pd.Series(status,name='status')], axis=1)
+    summary_df = pd.concat([pd.Series(sites,name='sites'),pd.Series(summary,name='summary'),pd.Series(status,name='status'),pd.Series(vartype,name='vartype')], axis=1)
     full_differences = summary_df[summary_df.status.isin(['DIFFERENCE'])]
     if len(full_differences.index) > 0:
         reduced_differences = full_differences[~full_differences.sites.isin(removals)]
         num_reduced_differences = len(reduced_differences.index)
-        final_differences = '; '.join([x for x in reduced_differences['summary']])
+        if gap_identity == 'compressed': 
+            compressed_differences = reduced_differences
+            consecutive_indels = find_consecutive_gaps(reduced_differences)
+            for key in consecutive_indels:
+                if len(consecutive_indels[key]) != 0:
+                    for i in range(len(consecutive_indels[key])):
+                        num_reduced_differences = (num_reduced_differences - consecutive_indels[key][i][2]) + 1
+                        beginning_site = consecutive_indels[key][i][0] 
+                        end_site = consecutive_indels[key][i][1]
+                        destroy = list(range(beginning_site,end_site))
+                        compressed_differences = compressed_differences[~compressed_differences.isin(destroy).iloc[:,0]]
+                        replacement_summary = compressed_differences.at[beginning_site-1, 'summary'].replace('-','del'+str(consecutive_indels[key][i][2]))
+                        compressed_differences.at[beginning_site-1, 'summary'] = replacement_summary
+            final_differences = '; '.join([x for x in compressed_differences['summary']])
+        else:
+            final_differences = '; '.join([x for x in reduced_differences['summary']])
     else:
         num_reduced_differences = 0
         final_differences = ''
@@ -273,7 +343,16 @@ def find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_en
     return(removals)
 
 #%%
-def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_ambiguous=False,trim_ends=True,seqtype='nucleotide', annotations = ''):
+def compare_seqs_parallel_old(pair,MSA,accession_list,gap_identity,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations= ''):
+#    print('pair: ',pair)
+#    print('msa: ',type(MSA))
+#    print('gap identity: ',gap_identity)
+#    print('ignore indels: ',ignore_indels)
+#    print('ignore gaps: ',ignore_gaps)
+#    print('ignore ambig: ',ignore_ambiguous)
+#    print('trim ends: ',trim_ends)
+#    print('seqtype: ',seqtype)
+#    print('annotations: ', annotations)
     ppair = pair.split(sep='\t')
     ppair = [x.split()[0] for x in ppair]
     sequences = []
@@ -289,7 +368,25 @@ def compare_seqs_parallel(pair,MSA,ignore_indels=False,ignore_gaps=False,ignore_
     seq2 = sequences[1].seq
     name2 = sequences[1].id
     removals = find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_ends,ignore_indels)
-    result = calc_differences(name1,seq1,name2,seq2,removals, annotations)
+    result = calc_differences(name1,seq1,name2,seq2,removals, annotations, gap_identity)
+    return pd.DataFrame.from_dict(result, orient='columns')
+
+#%%
+def compare_seqs_parallel(pair,MSA,accession_list,gap_identity,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations= ''):
+    ppair = pair.split(sep='\t')
+    ppair = [x.split()[0] for x in ppair]
+    i1 = accession_list.index(ppair[0])
+    i2 = accession_list.index(ppair[1])
+    if seqtype != 'nucleotide':
+        ambiguity_codes = []
+    else:
+        ambiguity_codes = ['M','R','W','S','Y','K','V','H','D','B']
+    seq1 = MSA[i1].seq
+    name1 = MSA[i1].id
+    seq2 = MSA[i2].seq
+    name2 = MSA[i2].id
+    removals = find_removals(seq1,seq2,ambiguity_codes,ignore_gaps,ignore_ambiguous,trim_ends,ignore_indels)
+    result = calc_differences(name1,seq1,name2,seq2,removals, annotations, gap_identity)
     return pd.DataFrame.from_dict(result, orient='columns')
 
 #%%
@@ -318,8 +415,9 @@ def parse_commands():
     parser.add_argument('-ig','--ignore_gaps', required=False, default=False, action='store_true', help="Ignore gaps when calculating pairwise identity")
     parser.add_argument('-ia','--ignore_ambiguous', required=False, default=False, action='store_true', help="Ignore ambiguous sites when calculating pairwise identity")
     parser.add_argument('-te','--trim_ends', required=False,  action='store_true', default=False, help='Trim runs of gaps ("N" or "-") at the beginning and end of alignments')
-    parser.add_argument('-tr','--translate', required=False,  action='store_true', default=False, help='Translate CDS regions from annotation file to calculate amino acid consequences')
-    parser.add_argument('-o','--outfile', required=False, default='results.csv', help='Name of the outfile to store results')
+    parser.add_argument('-tr','--translate', required=False,  action='store_true', default=False, help='EXPERIMENTAL: Translate CDS regions from annotation file to calculate amino acid consequences')
+    parser.add_argument('--gap_identity', required=False, default='compressed', help='Method to score gaps: "compressed" (default) or "blast". See: https://lh3.github.io/2018/11/25/on-the-definition-of-sequence-identity')
+    parser.add_argument('-o','--outfile_stem', required=False, default='results', help='Stem name for the results outfiles. Default = "results" --> "results.all.csv"; "results.matrix.csv"')
     args=parser.parse_args()
     return()
 
@@ -343,8 +441,18 @@ def main():
         trim_ends = True
     else:
         trim_ends = False
+    if args.gap_identity:
+        if args.gap_identity not in ['compressed','blast']:
+            print('\nError: gap identity must be one of "compressed" or "blast"\n')
+            sys.exit(-1)      
+        gap_identity = args.gap_identity
+    else:
+        gap_identity = "compressed"
+
     seqtype = args.data_type.lower()
     MSA = AlignIO.read(args.fasta,'fasta')
+    
+    accession_list = [record.id for record in MSA]
     
     if args.translate and not args.annotations:
         print('\nError: cannot calculate the amino acid consequences of differences without an annotation file\n')
@@ -352,6 +460,7 @@ def main():
     
     annotations = ''
     if args.translate:
+        printc("\nWarning: amino acid translation results are experimental.\nI don't recommend you use this.\n", 'yellow')
         annotations = pd.read_csv(args.annotations, header=None, sep="\t")
         insertions = find_insertions(MSA, annotations)
         fix_bed_insertions(annotations, insertions)
@@ -366,17 +475,19 @@ def main():
     if tqdm_installed == True:
         with mp.Pool(mp.cpu_count()) as pool:
             results = pool.starmap(compare_seqs_parallel,
-                                   tqdm.tqdm([(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations) for x in comparisons], total=len(comparisons)),
-                                   chunksize=1)
+                                   tqdm.tqdm([(x, MSA, accession_list, gap_identity,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations) for x in comparisons], total=len(comparisons)))#,
+                                   #chunksize=1)
     else:
         print("If you install 'tqdm', you can get a nice progress bar while the program runs")
         print("Try running 'python3 -m pip install tqdm' before you run this program again")
         with mp.Pool(mp.cpu_count()) as pool:
             results = pool.starmap(compare_seqs_parallel,
-                                   [(x, MSA,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype, annotations) for x in comparisons],
-                                   chunksize=1)
+                                   [(x,MSA,accession_list,gap_identity,ignore_indels,ignore_gaps,ignore_ambiguous,trim_ends,seqtype,annotations) for x in comparisons])#,
+                                   #chunksize=1)
     final = pd.concat(results)
-    final.to_csv(args.outfile, index = False)
+    final.to_csv(args.outfile_stem+".all.csv", index = False)
+    results_matrix = convert_to_matrix(final)
+    results_matrix.to_csv(args.outfile_stem+".matrix.csv")
     PID = pd.Series([float(x) for x in final['PID']],name='PID')
     mean_pid = PID.mean()
     median_pid = PID.median()
@@ -384,7 +495,7 @@ def main():
     print("Mean PID: {0}".format(mean_pid))
     print("Median PID: {0}".format(median_pid))
     print("Stdev PID: {0}".format(sd_pid))
-    printc('Analysis complete: check result in {0}\n'.format(args.outfile),'blue')
+    printc('Analysis complete: check result in {0} and {1}\n'.format(args.outfile_stem+".all.csv", args.outfile_stem+".matrix.csv"),'blue')
 #%%
 if __name__ == '__main__':
     main()
